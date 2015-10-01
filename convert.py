@@ -10,7 +10,7 @@ from scipy.optimize import curve_fit
 
 class CleanFiber:
 
-    def __init__(self, mat_filename, mat_pathname, threshold=.25, pad=300.,
+    def __init__(self, mat_filename, mat_pathname, threshold=150, pad=500.,
                  make_plot=False):
         self.contact_standard = {'threshold': threshold, 'pad': pad}
         self.mat_filename = mat_filename
@@ -20,25 +20,18 @@ class CleanFiber:
         self.get_mat_data()
         self.sort_traces()
         self.find_contact_by_force(threshold, pad)
-        self.cut_traces(make_plot=make_plot)
+        if not np.isnan(self.contact_pos):
+            self.cut_traces(make_plot=make_plot)
         return
 
     def get_animal_info(self):
-        with open('./notes/ModelGfpInfo0729.csv', 'r') as f:
-            animal_info_splitted = re.findall(
-                self.mat_filename + r'.+', f.read())[0].split(',')
-        self.animal_info = {'mat_filename': animal_info_splitted[0],
-                            'log_filename': animal_info_splitted[1],
-                            'date_recorded': animal_info_splitted[2],
-                            'unitid': int(animal_info_splitted[3]),
-                            'age': float(animal_info_splitted[4]),
-                            'weight': float(animal_info_splitted[5]),
-                            'tip_dia': float(animal_info_splitted[6]),
-                            'mouseid': int(animal_info_splitted[7])}
+        self.animal_info = {'date_str': self.mat_filename[:10],
+                            'unitid': int(self.mat_filename[11:13])}
         return self.animal_info
 
     def get_mat_data(self):
-        self.mat_data = loadmat(self.mat_pathname + self.mat_filename)
+        self.mat_data = loadmat(
+            os.path.join(self.mat_pathname, self.mat_filename))
         self.stim_block = []
         i = 0
         while True:
@@ -212,7 +205,7 @@ def plot_specific_fibers(fiberList, fname='temp'):
 
 def plot_static_dynamic(cleanFiberList, fs=16e3, save_data=False,
                         fname='static_dynamic'):
-    fig, axs = plt.subplots(3, 1, figsize=(3.27, 6.83))
+    fig, axs = plt.subplots(3, 1, figsize=(3.5, 6.83))
     static_dynamic_list = [[] for i in range(cleanFiberList[-1].fiber_id + 1)]
     fmt_list = ['*', 'D', 'v', 's', '.', 'o', '.', 'x', 'h', '+']
     color_list = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'r', 'g', 'b']
@@ -230,7 +223,7 @@ def plot_static_dynamic(cleanFiberList, fs=16e3, save_data=False,
             dynamic_displ_rate_list.append(stim_traces['dynamic_displ_rate'])
             dynamic_force_rate_list.append(stim_traces['dynamic_force_rate'])
         fmt, color = fmt_list[fiber_id], color_list[fiber_id]
-        label_text = cleanFiber.animal_info['mat_filename'][4:-4]
+        label_text = cleanFiber.mat_filename[:13]
         axs[0].plot(static_displ_list, static_force_list,
                     fmt, color=color, ms=6, label=label_text)
         axs[1].plot(static_displ_list, static_avg_fr_list,
@@ -244,6 +237,7 @@ def plot_static_dynamic(cleanFiberList, fs=16e3, save_data=False,
             dynamic_displ_rate_list, dynamic_force_rate_list]
     for axes in axs:
         axes.set_xlabel(r'Displ. ($\mu$m)')
+        axes.set_xlim(left=0)
     # Treatement for force subplot
     axs[2].set_xlabel('Force (mN)')
     # Other labels
@@ -307,13 +301,36 @@ def get_median_curve(curve_list, xnew=np.r_[0:1:1000j]):
 
 
 if __name__ == '__main__':
-    # Clear all old plots
-    """
-    for file_name in os.listdir('./plots/traces'):
-        if file_name.endswith('.png'):
-            os.remove('./plots/traces/'+file_name)
-    """
+    # Set the flags
+    make_plot = False
+    if make_plot:
+        # Clear all old plots
+        for file_name in os.listdir('./plots/traces'):
+            if file_name.endswith('.png'):
+                os.remove('./plots/traces/'+file_name)
     cleanFiberList = []
+    exclude_list = []  # ['2014-07-11-01', '2013-12-07-01']
+    for root, subdirs, files in os.walk('data'):
+        for fname in files:
+            if fname.endswith('.mat') and 'calibrated.mat' in fname\
+                    and 'CONT' in fname:
+                cleanFiber = CleanFiber(fname, root, make_plot=make_plot)
+                if not np.isnan(cleanFiber.contact_pos) and\
+                        cleanFiber.mat_filename[:13] not in exclude_list:
+                    cleanFiberList.append(cleanFiber)
+    for i, cleanFiber in enumerate(cleanFiberList):
+        cleanFiber.fiber_id = i
+    fig, axs, static_dynamic_array = plot_static_dynamic(
+        cleanFiberList, save_data=True)
+    # Get the variance
+    data_useful = static_dynamic_array[static_dynamic_array.T[2] > 0]
+    _, displ_res, _, _, _ = np.polyfit(data_useful.T[2], data_useful.T[4], 1,
+                                       full=True)
+    _, force_res, _, _, _ = np.polyfit(data_useful.T[3], data_useful.T[4], 1,
+                                       full=True)
+# %%
+"""
+
     pathname = './rawData/finalSAI/'
     for filename in os.listdir(pathname):
         if filename.endswith('.mat'):
@@ -337,3 +354,4 @@ if __name__ == '__main__':
     finalCleanFiberList = [cleanFiber for cleanFiber in cleanFiberList if
                            cleanFiber.animal_info['mat_filename'] not in
                            exclude_list]
+"""
