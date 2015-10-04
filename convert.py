@@ -116,7 +116,7 @@ class CleanFiber:
             contact_index = np.nonzero(
                 stim_traces_full['displ'] >= self.contact_pos)[0][0]
             max_force_index = stim_traces_full['force'].argmax()
-            self.traces.append({
+            trace = {
                 'force': stim_traces_full['force'][
                     contact_index:contact_index + 6 * self.fs],
                 'displ': stim_traces_full['displ'][
@@ -138,23 +138,22 @@ class CleanFiber:
                         contact_index:max_force_index]).mean() * self.fs,
                 'dynamic_displ_rate': np.diff(
                     stim_traces_full['displ'][
-                        contact_index:max_force_index]).mean() * self.fs,
-            })
+                        contact_index:max_force_index]).mean() * self.fs}
             try:
-                self.traces[-1]['raw_spike'] = stim_traces_full[
+                trace['raw_spike'] = stim_traces_full[
                     'raw_spike'][contact_index:contact_index + 6 * self.fs]
             except KeyError:
                 pass
-            self.traces[-1]['static_avg_fr'] = self._get_avg_fr(
+            trace['static_avg_fr'] = self._get_avg_fr(
                 stim_traces_full['spike_trace'][
                     max_force_index + int(2. * self.fs):max_force_index + int(
                         4.5 * self.fs)])
-            self.traces[-1]['dynamic_avg_fr'] = self._get_avg_fr(
+            trace['dynamic_avg_fr'] = self._get_avg_fr(
                 stim_traces_full['spike_trace'][contact_index:max_force_index])
-            if np.any(self.traces[-1]['spike_trace']):
-                self.traces[-1]['spike_time'], self.traces[-1]['spike_isi'],\
-                    self.traces[-1]['spike_fr'] = self._get_spike_data(
-                        self.traces[-1]['spike_trace'])
+            if np.any(trace['spike_trace']):
+                trace['spike_time'], trace['spike_isi'],\
+                    trace['spike_fr'] = self._get_spike_data(
+                        trace['spike_trace'])
             if make_plot:
                 fig, axs = plt.subplots(3, 1, figsize=(6.83, 9.19))
                 for i, item in enumerate(['displ', 'force', 'spike_trace']):
@@ -170,8 +169,8 @@ class CleanFiber:
                     axs[i].set_xlabel('Time (s)')
                 axs[0].set_title(
                     'displ = %f, force = %f, missed spikes = %d' % (
-                        self.traces[-1]['static_displ'],
-                        self.traces[-1]['static_force'],
+                        trace['static_displ'],
+                        trace['static_force'],
                         stim_traces_full['spike_trace'][:contact_index].sum()))
                 axs[0].set_ylabel('Displ. ($\mu$m)')
                 axs[1].set_ylabel('Force (mN)')
@@ -180,6 +179,9 @@ class CleanFiber:
                 fig.savefig(
                     './plots/traces/' + self.mat_filename[:-4] + 'stim' +
                     str(stim_id) + '.png', dpi=300)
+            # Clean the traces with negative displacements
+            if trace['static_displ'] > 0:
+                self.traces.append(trace)
         # Clear all unclosed plots to save memory
         plt.close('all')
         return self.traces
@@ -237,7 +239,7 @@ def plot_static_dynamic(cleanFiberList, fs=16e3, save_data=False,
             dynamic_displ_rate_list, dynamic_force_rate_list]
     for axes in axs:
         axes.set_xlabel(r'Displ. ($\mu$m)')
-        axes.set_xlim(left=0)
+#        axes.set_xlim(left=0)
     # Treatement for force subplot
     axs[2].set_xlabel('Force (mN)')
     # Other labels
@@ -303,6 +305,7 @@ def get_median_curve(curve_list, xnew=np.r_[0:1:1000j]):
 if __name__ == '__main__':
     # Set the flags
     make_plot = False
+    save_to_pickle = False
     if make_plot:
         # Clear all old plots
         for file_name in os.listdir('./plots/traces'):
@@ -323,35 +326,16 @@ if __name__ == '__main__':
     fig, axs, static_dynamic_array = plot_static_dynamic(
         cleanFiberList, save_data=True)
     # Get the variance
-    data_useful = static_dynamic_array[static_dynamic_array.T[2] > 0]
-    _, displ_res, _, _, _ = np.polyfit(data_useful.T[2], data_useful.T[4], 1,
-                                       full=True)
-    _, force_res, _, _, _ = np.polyfit(data_useful.T[3], data_useful.T[4], 1,
-                                       full=True)
-# %%
-"""
-
-    pathname = './rawData/finalSAI/'
-    for filename in os.listdir(pathname):
-        if filename.endswith('.mat'):
-            cleanFiberList.append(CleanFiber(
-                filename, pathname, threshold=.25, pad=300., make_plot=False))
-            print(filename + ' completed...')
-    for i, cleanFiber in enumerate(cleanFiberList):
-        cleanFiber.fiber_id = i
-    fig, axs, static_dynamic_array = plot_static_dynamic(
-        cleanFiberList, save_data=True)
+    _, displ_res, _, _, _ = np.polyfit(
+        static_dynamic_array.T[2], static_dynamic_array.T[4], 1, full=True)
+    _, force_res, _, _, _ = np.polyfit(
+        static_dynamic_array.T[3], static_dynamic_array.T[4], 1, full=True)
+    # Get extra data
     ramp_time_list = extract_ramp_time(cleanFiberList)
     displ_list = static_dynamic_array[:, 1]
     ramp_time_coeff = np.polyfit(displ_list, ramp_time_list, 1)
     regulated_ramp_curve_list, median_regulated_ramp_curve, popt =\
         extract_regulated_ramp_curve(cleanFiberList)
-    with open('./finaldata/cleanFiberList.pkl', 'wb') as f:
-        pickle.dump(cleanFiberList, f)
-    # Plot after exclusion
-    exclude_list = ['2012042701V_01.mat', '2012042703V_01.mat',
-                    '2012031501V_01.mat', '2012043002V_01.mat']
-    finalCleanFiberList = [cleanFiber for cleanFiber in cleanFiberList if
-                           cleanFiber.animal_info['mat_filename'] not in
-                           exclude_list]
-"""
+    if save_to_pickle:
+        with open('./data/cleanFiberList.pkl', 'wb') as f:
+            pickle.dump(cleanFiberList, f)
