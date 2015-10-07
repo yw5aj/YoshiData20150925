@@ -1,9 +1,7 @@
 import os
 import time
 import copy
-import numpy as np
 from scipy.io import loadmat, savemat
-import matplotlib.pyplot as plt
 
 
 def if_earlier(time_str, std_time_str='2014-07-01', fmt_str='%Y-%m-%d'):
