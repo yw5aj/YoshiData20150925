@@ -6,6 +6,7 @@ import copy
 from scipy.io import loadmat
 from scipy.signal import butter, filtfilt
 from scipy.optimize import curve_fit
+from lmfit import Model
 
 
 # Plotting constants
@@ -204,10 +205,17 @@ class CleanFiber:
         return avg_fr
 
 
-def get_resvar(x, y, deg=2):
-    assert x.size == y.size
-    p, res, _, _, _ = np.polyfit(x, y, deg, full=True)
-    return res[0] / (x.size - 1)
+def get_resdev(x, y, predict=False):
+
+    def sigmoid(x, a, b, c):
+        return a / (1 + np.exp(b * (c - x)))
+    sigmoidmod = Model(sigmoid)
+    modfit = sigmoidmod.fit(y, x=x, a=y.max(), b=1 / (x.max() - x.min()),
+                            c=x.max())
+    if not predict:
+        return np.abs(modfit.residual).mean()
+    else:
+        return (np.abs(modfit.residual).mean(), modfit.best_fit)
 
 
 def plot_specific_fibers(fiber_list, fname='temp'):
@@ -269,6 +277,7 @@ def plot_static_dynamic(cleanfiber_list, fs=16e3, save_data=False,
     fig.tight_layout()
     fig.subplots_adjust(top=.85)
     fig.savefig('./plots/%s.png' % fname, dpi=300)
+    plt.close(fig)
     static_dynamic_array = None
     static_dynamic_array = np.vstack((static_dynamic_list))
     if save_data:
@@ -486,12 +495,12 @@ def group_fr(static_dynamic_array, figname='compare_variance.png'):
             self.binned_exp['displ_mean'] = np.array(sorted(
                 self.binned_exp['displ_mean']))
 
-        def get_var(self):
-            displvar = get_resvar(self.binned_exp['displ_mean'],
-                                  self.binned_exp['static_fr_mean'])
-            forcevar = get_resvar(self.binned_exp['force_mean'],
-                                  self.binned_exp['static_fr_mean'])
-            return displvar, forcevar
+        def get_dev(self):
+            displdev = get_resdev(self.static_displ,
+                                  self.static_avg_fr)
+            forcedev = get_resdev(self.static_force,
+                                  self.static_avg_fr)
+            return displdev, forcedev
 
     # Collect fiber data
     fiber_list = []
@@ -504,23 +513,18 @@ def group_fr(static_dynamic_array, figname='compare_variance.png'):
         force_list.extend(fiber.binned_exp['force_mean'])
         static_fr_list.extend(fiber.binned_exp['static_fr_mean'])
     # Perform fitting
-    displ_static_fit_param = np.polyfit(displ_list, static_fr_list, 1)
-    force_static_fit_param = np.polyfit(force_list, static_fr_list, 1)
-    displ_static_predict = np.polyval(displ_static_fit_param, displ_list)
-    force_static_predict = np.polyval(force_static_fit_param, force_list)
-    # Calculate residual variance
-    displ_static_fit_res = displ_static_predict - np.asarray(static_fr_list)
-    force_static_fit_res = force_static_predict - np.asarray(static_fr_list)
-    displ_static_fit_resvar = displ_static_fit_res.var(ddof=1)
-    force_static_fit_resvar = force_static_fit_res.var(ddof=1)
-    # Get resvar for each fiber
-    displvar_list, forcevar_list = [], []
+    displ_static_fit_resdev, displ_static_predict = get_resdev(
+        np.array(displ_list), np.array(static_fr_list), predict=True)
+    force_static_fit_resdev, force_static_predict = get_resdev(
+        np.array(force_list), np.array(static_fr_list), predict=True)
+    # Get resdev for each fiber
+    displdev_list, forcedev_list = [], []
     for fiber in fiber_list:
-        displvar, forcevar = fiber.get_var()
-        displvar_list.append(displvar)
-        forcevar_list.append(forcevar)
-    displvar_array = np.array(displvar_list)
-    forcevar_array = np.array(forcevar_list)
+        displdev, forcedev = fiber.get_dev()
+        displdev_list.append(displdev)
+        forcedev_list.append(forcedev)
+    displdev_array = np.array(displdev_list)
+    forcedev_array = np.array(forcedev_list)
     # Plotting
     fig, axs = plt.subplots(3, 1, figsize=(3.5, 9))
     for i, fiber in enumerate(fiber_list):
@@ -541,12 +545,12 @@ def group_fr(static_dynamic_array, figname='compare_variance.png'):
                             fiber.binned_exp['force_mean'].argsort()],
                         fmt=fmt, color=color, mec=color, ms=MS,
                         label='Fiber #%d' % (i + 1))
-    axs[0].plot([], [], '-', c='.5', label='Linear regression')
+    axs[0].plot([], [], '-', color='.5', label='Linear regression')
     axs[1].plot(np.sort(displ_list) * 1e-3,
-                np.sort(displ_static_predict), '-', c='.5',
+                np.sort(displ_static_predict), '-', color='.5',
                 label='Linear regression')
     axs[2].plot(sorted(force_list), np.sort(force_static_predict),
-                '-k', c='.5',
+                '-', color='.5',
                 label='Linear regression')
     axs[0].set_xlabel(r'Static displ. (mm)')
     axs[1].set_xlabel(r'Static displ. (mm)')
@@ -567,8 +571,8 @@ def group_fr(static_dynamic_array, figname='compare_variance.png'):
     fig.tight_layout()
     fig.savefig('./plots/%s' % figname, dpi=300)
     plt.close(fig)
-    return (displ_static_fit_resvar, force_static_fit_resvar,
-            displvar_array, forcevar_array)
+    return (displ_static_fit_resdev, force_static_fit_resdev,
+            displdev_array, forcedev_array)
 
 
 if __name__ == '__main__':
@@ -613,8 +617,12 @@ if __name__ == '__main__':
     regulated_ramp_curve_list, median_regulated_ramp_curve, popt =\
         extract_regulated_ramp_curve(cleanfiber_list)
     # %% Get grouped view
-    displvar, forcevar, displvar_array, forcevar_array = group_fr(
+    displdev, forcedev, displdev_array, forcedev_array = group_fr(
         static_dynamic_array, 'compare_variance_all.png')
+    displdev_gross = get_resdev(static_dynamic_array.T[2],
+                                static_dynamic_array.T[4])
+    forcedev_gross = get_resdev(static_dynamic_array.T[3],
+                                static_dynamic_array.T[4])
     # %% Pick three best fibers
     rep_fiber_list = []
     include_list = ['2014-07-11-02', '2014-01-16-01',
@@ -625,4 +633,4 @@ if __name__ == '__main__':
     for i, fiber in enumerate(rep_fiber_list):
         fiber.fiber_id = i
     _, _, sd_rep = plot_static_dynamic(rep_fiber_list, fname='sd_rep')
-    displvar_rep, forcevar_rep, _, _ = group_fr(sd_rep, 'var_rp.png')
+    displdev_rep, forcedev_rep, _, _ = group_fr(sd_rep, 'dev_rp.png')
