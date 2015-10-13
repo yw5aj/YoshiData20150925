@@ -7,6 +7,7 @@ from scipy.io import loadmat
 from scipy.signal import butter, filtfilt
 from scipy.optimize import curve_fit
 from lmfit import Model
+import pandas as pd
 
 
 # Plotting constants
@@ -19,10 +20,11 @@ MS = 6
 class CleanFiber:
 
     def __init__(self, mat_filename, mat_pathname, threshold=150, pad=500.,
-                 make_plot=False):
+                 make_plot=False, no_force=False):
         self.contact_standard = {'threshold': threshold, 'pad': pad}
         self.mat_filename = mat_filename
         self.mat_pathname = mat_pathname
+        self.no_force = no_force
         self.fs = int(16e3)  # Yoshi's sampling frequency
         self.get_animal_info()
         self.get_mat_data()
@@ -119,6 +121,12 @@ class CleanFiber:
             self.contact_pos = np.median(self.contact_pos) - pad
         else:
             self.contact_pos = np.nan
+        # Hard code for two fibers w/o force traces
+        if self.no_force:
+            if '2014-01-10-01' in self.mat_filename:
+                self.contact_pos = 445.
+            elif '2013-03-19-01' in self.mat_filename:
+                self.contact_pos = 686.
         return self.contact_pos
 
     def cut_traces(self, make_plot=False):
@@ -212,9 +220,19 @@ def get_resvar(x, y, predict=False, fine_predict=False):
 
     def sigmoid(x, a, b, c):
         return a / (1 + np.exp(b * (c - x)))
-    sigmoidmod = Model(sigmoid)
-    modfit = sigmoidmod.fit(y, x=x, a=y.max(), b=1 / (x.max() - x.min()),
-                            c=x.max())
+
+    def linear(x, a, b):
+        return a * x + b
+    assert len(x) == len(y)
+    if len(x) < 3:
+        sigmoidmod = Model(linear)
+        modfit = sigmoidmod.fit(y, x=x,
+                                a=(y.max() - y.min()) / (x.max() - x.min()),
+                                b=y.min())
+    else:
+        sigmoidmod = Model(sigmoid)
+        modfit = sigmoidmod.fit(y, x=x, a=y.max(), b=1 / (x.max() - x.min()),
+                                c=x.max())
     if not predict:
         return modfit.residual.var()
     elif not fine_predict:
@@ -628,9 +646,9 @@ def group_fr(static_dynamic_array, figname='compare_variance.png'):
     axs[2].set_ylim(bottom=-5)
     axs[2].set_xlim(-.05)
     # Adding panel labels
-    for axes_id, axes in enumerate(axs.ravel()):
-        axes.text(-.175, 1.05, chr(65 + axes_id), transform=axes.transAxes,
-                  fontsize=12, fontweight='bold', va='top')
+#    for axes_id, axes in enumerate(axs.ravel()):
+#        axes.text(-.125, 1.05, chr(65 + axes_id), transform=axes.transAxes,
+#                  fontsize=12, fontweight='bold', va='top')
     fig.tight_layout()
     fig.savefig('./plots/all_%s' % figname, dpi=300)
     plt.close(fig)
@@ -641,7 +659,9 @@ def group_fr(static_dynamic_array, figname='compare_variance.png'):
 if __name__ == '__main__':
     # Set the flags
     make_plot = False
-    run_fiber = False
+    no_force = False  # Include fibers with no force traces?
+    exclude_inhibition = True  # Exclude fibers with inhibition traces?
+    run_fiber = True
     pickle_fname = './data/cleanfiber_list.pkl'
     if make_plot:
         # Clear all old plots
@@ -650,17 +670,25 @@ if __name__ == '__main__':
                 os.remove('./plots/traces/'+file_name)
     if run_fiber:
         cleanfiber_list = []
-        exclude_list = ['2013-12-21-02']
+        if exclude_inhibition:
+            inhibit_list = ['2013-12-21-02', '2014-01-10-01']
+        else:
+            inhibit_list = []
+        fiber_table = {}
         for root, subdirs, files in os.walk('data'):
             for fname in files:
                 if fname.endswith('.mat') and 'calibrated.mat' in fname\
                         and 'CONT' in fname and 'inhibition' not in fname:
-                    cleanFiber = CleanFiber(fname, root, make_plot=make_plot)
+                    cleanFiber = CleanFiber(
+                        fname, root, make_plot=make_plot, no_force=no_force)
                     if not np.isnan(cleanFiber.contact_pos) and\
-                            cleanFiber.mat_filename[:13] not in exclude_list:
+                            cleanFiber.mat_filename[:13] not in inhibit_list:
                         cleanfiber_list.append(cleanFiber)
         for i, cleanFiber in enumerate(cleanfiber_list):
             cleanFiber.fiber_id = i
+            fiber_table['#%d' % (i + 1)] = cleanFiber.mat_filename
+        fiber_series = pd.Series(fiber_table)
+        fiber_series.to_csv('./csvs/fiber_series.csv')
         with open(pickle_fname, 'wb') as f:
             pickle.dump(cleanfiber_list, f)
     else:
